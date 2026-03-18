@@ -3,18 +3,25 @@ version: '3'
 services:
 
   catalog:
-    build: ./catalog
+    build: ./Catalog
     ports:
       - "5001:5001"
     volumes:
-      - ./data:/data
+      - ./Data:/data
 
   order:
-    build: ./order
+    build: ./Order
     ports:
       - "5002:5002"
+    volumes:
+      - ./Data:/data
+    depends_on:
+      - catalog
 
   frontend:
-    build: ./frontend
+    build: ./Frontend
     ports:
       - "5000:5000"
+    depends_on:
+      - catalog
+      - order
