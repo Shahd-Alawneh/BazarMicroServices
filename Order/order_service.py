@@ -96,7 +96,6 @@ def list_orders():
     except FileNotFoundError:
         return jsonify([])
 
-
 if __name__ == "__main__":
     init_order_log()
     app.run(host="0.0.0.0", port=5002, debug=False)

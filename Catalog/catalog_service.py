@@ -27,7 +27,7 @@ def write_catalog(books):
             writer.writerow(b)
 
 
-# ✅ query by subject
+#  query by subject
 @app.route("/search/<topic>")
 def search(topic):
     books = read_catalog()
@@ -43,7 +43,7 @@ def search(topic):
     return jsonify(result)
 
 
-# ✅ query by item
+#  query by item
 @app.route("/info/<int:item_id>")
 def info(item_id):
     books = read_catalog()
@@ -57,7 +57,7 @@ def info(item_id):
     return jsonify({"error": "item not found"}), 404
 
 
-# ✅ FIX 3: endpoint مسمى /update بدل /purchase، ويستقبل POST
+#  FIX 3: endpoint مسمى /update بدل /purchase، ويستقبل POST
 # يُستخدم داخليًا من Order Server فقط لتخفيض الكمية
 @app.route("/update/<int:item_id>", methods=["POST"])
 def update(item_id):

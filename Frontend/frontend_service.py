@@ -6,7 +6,6 @@ app = Flask(__name__)
 CATALOG = "http://catalog:5001"
 ORDER   = "http://order:5002"
 
-
 @app.route("/search/<topic>")
 def search(topic):
     try:
