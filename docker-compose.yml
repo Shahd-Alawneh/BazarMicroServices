@@ -1,27 +1,74 @@
-version: '3'
+version: '3.8'
 
 services:
-
-  catalog:
+  catalog1:
     build: ./Catalog
+    container_name: bazar-catalog1
+    environment:
+      - REPLICA_NAME=catalog1
+      - CATALOG_FILE=/data/catalog1.csv
+      - FRONTEND_URL=http://frontend:5000
+      - PEER_URLS=http://catalog2:5001
     ports:
       - "5001:5001"
     volumes:
       - ./Data:/data
 
-  order:
+  catalog2:
+    build: ./Catalog
+    container_name: bazar-catalog2
+    environment:
+      - REPLICA_NAME=catalog2
+      - CATALOG_FILE=/data/catalog2.csv
+      - FRONTEND_URL=http://frontend:5000
+      - PEER_URLS=http://catalog1:5001
+    ports:
+      - "5003:5001"
+    volumes:
+      - ./Data:/data
+
+  order1:
     build: ./Order
+    container_name: bazar-order1
+    environment:
+      - REPLICA_NAME=order1
+      - ORDER_LOG=/data/orders1.csv
+      - CATALOG_WRITE_URL=http://catalog1:5001
     ports:
       - "5002:5002"
     volumes:
       - ./Data:/data
     depends_on:
-      - catalog
+      - catalog1
+      - catalog2
+
+  order2:
+    build: ./Order
+    container_name: bazar-order2
+    environment:
+      - REPLICA_NAME=order2
+      - ORDER_LOG=/data/orders2.csv
+      - CATALOG_WRITE_URL=http://catalog1:5001
+    ports:
+      - "5004:5002"
+    volumes:
+      - ./Data:/data
+    depends_on:
+      - catalog1
+      - catalog2
 
   frontend:
     build: ./Frontend
+    container_name: bazar-frontend
+    environment:
+      - CATALOG_REPLICAS=http://catalog1:5001,http://catalog2:5001
+      - ORDER_REPLICAS=http://order1:5002,http://order2:5002
+      - CACHE_LIMIT=10
+      - CACHE_TTL_SECONDS=120
     ports:
       - "5000:5000"
     depends_on:
-      - catalog
-      - order
+      - catalog1
+      - catalog2
+      - order1
+      - order2
