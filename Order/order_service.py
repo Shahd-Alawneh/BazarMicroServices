@@ -1,101 +1,99 @@
 from flask import Flask, jsonify
-import requests
 import csv
 import os
 import threading
 from datetime import datetime
+import requests
 
 app = Flask(__name__)
 
-CATALOG = "http://catalog:5001"
+REPLICA_NAME = os.environ.get("REPLICA_NAME", "order")
+ORDER_LOG = os.environ.get("ORDER_LOG", "/data/orders.csv")
+CATALOG_WRITE_URL = os.environ.get("CATALOG_WRITE_URL", "http://catalog1:5001")
 
-ORDER_LOG = "/data/orders.csv"
 log_lock = threading.Lock()
+FIELDNAMES = ["order_id", "item_id", "title", "timestamp", "served_by"]
 
 
 def init_order_log():
-    """إنشاء ملف الـ orders لو مش موجود"""
     if not os.path.exists(ORDER_LOG):
-        with open(ORDER_LOG, "w", newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=["order_id", "item_id", "title", "timestamp"])
+        with open(ORDER_LOG, "w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
             writer.writeheader()
+
+
+def read_orders():
+    init_order_log()
+    with open(ORDER_LOG, newline="", encoding="utf-8") as file:
+        return list(csv.DictReader(file))
 
 
 def save_order(item_id, title):
-    """حفظ الطلب في ملف orders.csv"""
     with log_lock:
-        orders = []
-        try:
-            with open(ORDER_LOG, newline='') as f:
-                orders = list(csv.DictReader(f))
-        except FileNotFoundError:
-            pass
-        
-        new_id = len(orders) + 1
-        new_order = {
-            "order_id": new_id,
+        orders = read_orders()
+        next_id = len(orders) + 1
+        row = {
+            "order_id": next_id,
             "item_id": item_id,
             "title": title,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "served_by": REPLICA_NAME,
         }
-        orders.append(new_order)
-        
-        with open(ORDER_LOG, "w", newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=["order_id", "item_id", "title", "timestamp"])
+        orders.append(row)
+        with open(ORDER_LOG, "w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
             writer.writeheader()
             writer.writerows(orders)
-        
-        return new_id
+        return row
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service": REPLICA_NAME})
 
 
 @app.route("/purchase/<int:item_id>", methods=["POST"])
 def purchase(item_id):
     try:
-        r = requests.get(f"{CATALOG}/info/{item_id}", timeout=5)
-    except requests.exceptions.ConnectionError:
-        return jsonify({"error": "catalog service unavailable"}), 503
+        info_response = requests.get(f"{CATALOG_WRITE_URL}/info/{item_id}", timeout=5)
+    except requests.RequestException:
+        return jsonify({"error": "catalog service unavailable", "served_by": REPLICA_NAME}), 503
 
-    if r.status_code == 404:
-        return jsonify({"error": "item not found"}), 404
+    if info_response.status_code != 200:
+        return jsonify(info_response.json()), info_response.status_code
 
-    book = r.json()
-
-    if book.get("quantity", 0) <= 0:
-        return jsonify({"error": "out of stock"}), 400
+    book = info_response.json()
+    if int(book.get("quantity", 0)) <= 0:
+        return jsonify({"error": "out of stock", "served_by": REPLICA_NAME}), 400
 
     try:
-        u = requests.post(
-            f"{CATALOG}/update/{item_id}",
+        update_response = requests.post(
+            f"{CATALOG_WRITE_URL}/update/{item_id}",
             json={"action": "decrement"},
-            timeout=5
+            timeout=8,
         )
-    except requests.exceptions.ConnectionError:
-        return jsonify({"error": "catalog service unavailable"}), 503
+    except requests.RequestException:
+        return jsonify({"error": "catalog update unavailable", "served_by": REPLICA_NAME}), 503
 
-    if u.status_code != 200:
-        return jsonify({"error": u.json().get("error", "update failed")}), 400
+    if update_response.status_code != 200:
+        return jsonify(update_response.json()), update_response.status_code
 
-    order_id = save_order(item_id, book["title"])
-
-    print(f"[ORDER] bought book '{book['title']}' | order_id={order_id}")
+    order = save_order(item_id, book["title"])
+    print(f"[{REPLICA_NAME}] bought book '{book['title']}' | order_id={order['order_id']}")
 
     return jsonify({
         "message": "purchase successful",
-        "order_id": order_id,
-        "item_id": item_id,
-        "title": book["title"]
+        "order": order,
+        "catalog_update": update_response.json(),
+        "served_by": REPLICA_NAME,
     })
 
 
 @app.route("/orders", methods=["GET"])
 def list_orders():
-    try:
-        with open(ORDER_LOG, newline='') as f:
-            orders = list(csv.DictReader(f))
-        return jsonify(orders)
-    except FileNotFoundError:
-        return jsonify([])
+    return jsonify(read_orders())
+
 
 if __name__ == "__main__":
     init_order_log()
-    app.run(host="0.0.0.0", port=5002, debug=False)
+    app.run(host="0.0.0.0", port=5002, debug=False, threaded=True)
