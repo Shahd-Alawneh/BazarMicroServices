@@ -50,6 +50,8 @@ There are two order replicas. The front-end forwards purchase requests to them u
 - `Data/orders1.csv`
 - `Data/orders2.csv`
 
+After a purchase is written locally, the order replica also sends the order record to the peer order replica through the internal endpoint `POST /replica/order`. This keeps both order logs synchronized while still allowing the front-end to distribute purchase requests across `order1` and `order2`.
+
 The order service does not keep catalog data itself. It checks the catalog and asks the catalog service to decrement stock.
 
 ## 4. Caching Design
