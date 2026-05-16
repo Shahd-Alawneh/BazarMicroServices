@@ -1,309 +1,146 @@
-# Bazar Microservices
+# Bazar.com Lab 2 — Replication, Caching, and Consistency
 
-A simple multi-tier online bookstore built using a microservices architecture.
+This repository extends the Lab 1 Bazar.com bookstore into a higher-load version of the system. Lab 2 adds:
 
-## Project Overview
+- seven catalog books instead of four,
+- two catalog replicas,
+- two order replicas,
+- a front-end round-robin load balancer,
+- an in-memory LRU-style cache for `info` lookups,
+- cache invalidation before write operations,
+- replica-to-replica synchronization for catalog updates,
+- scripts and documentation for output and performance measurements.
 
-This project implements **Bazar.com**, a small online bookstore system using three independent microservices:
-
-* **Frontend Service**: handles client requests
-* **Catalog Service**: manages the book catalog
-* **Order Service**: processes purchase requests
-
-The services communicate using **HTTP REST APIs** and are deployed using **Docker Compose**.
-
----
-
-## System Architecture
-
-The system consists of three services:
-
-1. **Frontend**
-
-   * Accepts user requests
-   * Forwards search and info requests to the catalog service
-   * Forwards purchase requests to the order service
-
-2. **Catalog**
-
-   * Stores books data
-   * Supports searching by topic
-   * Supports retrieving book details by ID
-   * Supports updating price and quantity
-
-3. **Order**
-
-   * Handles purchase requests
-   * Checks availability through the catalog service
-   * Updates stock after successful purchase
-   * Logs orders in a CSV file
-
----
-
-## Technologies Used
-
-* Python 3
-* Flask
-* Docker
-* Docker Compose
-* CSV files for persistent storage
-
----
-
-## Project Structure
+## Architecture
 
 ```text
-Bazar/
-├── Catalog/
-│   ├── catalog_service.py
-│   ├── catalog.csv
-│   └── Dockerfile
-├── Order/
-│   ├── order_service.py
-│   ├── orders.csv
-│   └── Dockerfile
-├── Frontend/
-│   ├── frontend_service.py
-│   └── Dockerfile
-├── docs/
-│   ├── design.md
-│   └── output.md
-├── docker-compose.yml
-└── README.md
+Client
+  |
+  v
+Frontend :5000
+  |-- round-robin reads --> Catalog Replica 1 :5001
+  |-- round-robin reads --> Catalog Replica 2 :5003
+  |-- round-robin buys  --> Order Replica 1   :5002
+  |-- round-robin buys  --> Order Replica 2   :5004
+
+Order replicas send writes to catalog1.
+Catalog1 invalidates the frontend cache, updates its CSV file, then replicates the update to catalog2.
 ```
 
----
+## Services
 
-## REST API Endpoints
+| Service | Container | Host Port | Internal Port | Responsibility |
+|---|---|---:|---:|---|
+| Frontend | `bazar-frontend` | 5000 | 5000 | Client API, cache, load balancing |
+| Catalog 1 | `bazar-catalog1` | 5001 | 5001 | Catalog read/write replica |
+| Catalog 2 | `bazar-catalog2` | 5003 | 5001 | Catalog read replica synchronized by catalog1 |
+| Order 1 | `bazar-order1` | 5002 | 5002 | Purchase replica |
+| Order 2 | `bazar-order2` | 5004 | 5002 | Purchase replica |
 
-### Frontend Service
+## Data Files
 
-#### Search by topic
+The project still uses lightweight CSV persistence:
 
-```http
-GET /search/<topic>
+```text
+Data/catalog1.csv   # catalog replica 1 database
+Data/catalog2.csv   # catalog replica 2 database
+Data/orders1.csv    # order replica 1 log
+Data/orders2.csv    # order replica 2 log
 ```
 
-Example:
-
-```http
-GET /search/distributed systems
-```
-
-#### Get book information
-
-```http
-GET /info/<item_id>
-```
-
-Example:
-
-```http
-GET /info/2
-```
-
-#### Purchase a book
-
-```http
-POST /purchase/<item_id>
-```
-
-Example:
-
-```http
-POST /purchase/2
-```
-
----
-
-### Catalog Service
-
-#### Search books by topic
-
-```http
-GET /search/<topic>
-```
-
-#### Get book details by ID
-
-```http
-GET /info/<item_id>
-```
-
-#### Update a book
-
-```http
-POST /update/<item_id>
-```
-
-Example request body:
-
-```json
-{
-  "action": "increment",
-  "value": 3
-}
-```
-
-Supported actions:
-
-* `set_price`
-* `decrement`
-* `increment`
-* `set_quantity`
-
----
-
-### Order Service
-
-#### Purchase endpoint
-
-```http
-POST /purchase/<item_id>
-```
-
-The order service:
-
-1. checks if the item exists
-2. verifies stock quantity
-3. decrements quantity in catalog
-4. records the purchase in `orders.csv`
-
----
-
-## Data Storage
-
-This project uses CSV files for persistent storage:
-
-* `catalog.csv` stores:
-
-  * book ID
-  * title
-  * topic
-  * price
-  * quantity
-
-* `orders.csv` stores:
-
-  * purchased book records
-
-This keeps the system simple and lightweight.
-
----
-
-## How to Run the Project
-
-### 1. Clone the repository
+## Run the Project
 
 ```bash
-git clone <your-repository-url>
-cd Bazar
+docker compose up --build
 ```
 
-### 2. Build and start the services
-
-```bash
-docker-compose up --build
-```
-
-### 3. Access the services
-
-Example local ports:
-
-* Frontend: `http://localhost:5000`
-* Catalog: `http://localhost:5001`
-* Order: `http://localhost:5002`
-
----
-
-## Example Requests
-
-### Search for books by topic
+Open another terminal and test the front-end API:
 
 ```bash
 curl http://localhost:5000/search/distributed%20systems
-```
-
-### Get information about a book
-
-```bash
 curl http://localhost:5000/info/2
-```
-
-### Purchase a book
-
-```bash
+curl http://localhost:5000/info/2
 curl -X POST http://localhost:5000/purchase/2
+curl http://localhost:5000/info/2
+curl http://localhost:5000/cache/stats
 ```
 
-### Update a book in catalog
+You can also run the prepared client script:
 
 ```bash
-curl -X POST http://localhost:5001/update/2 -H "Content-Type: application/json" -d "{\"action\":\"increment\",\"value\":2}"
+python scripts/client_demo.py
 ```
 
----
+## Main API Endpoints
 
-## Sample Output
+### Frontend
 
-### Search
+| Method | Endpoint | Notes |
+|---|---|---|
+| GET | `/search/<topic>` | Uses catalog round-robin, no cache |
+| GET | `/info/<item_id>` | Uses cache first, then catalog round-robin |
+| GET | `/nocache/info/<item_id>` | Bypasses cache for measurements |
+| POST | `/purchase/<item_id>` | Uses order round-robin |
+| POST | `/cache/invalidate/<item_id>` | Called by catalog before writes |
+| GET | `/cache/stats` | Shows hit/miss/invalidation counters |
+| POST | `/cache/clear` | Clears the cache before experiments |
+
+### Catalog Replicas
+
+| Method | Endpoint | Notes |
+|---|---|---|
+| GET | `/search/<topic>` | Query by topic |
+| GET | `/info/<item_id>` | Query by item ID |
+| POST | `/update/<item_id>` | Write operation, invalidates cache, then replicates |
+| POST | `/replica/update/<item_id>` | Internal synchronization endpoint |
+
+Supported update actions:
 
 ```json
-[
-  {
-    "id": 1,
-    "title": "How to get a good grade in DOS in 40 minutes a day"
-  },
-  {
-    "id": 2,
-    "title": "RPCs for Noobs"
-  }
-]
+{ "action": "decrement" }
+{ "action": "increment", "value": 3 }
+{ "action": "set_price", "value": 45 }
+{ "action": "set_quantity", "value": 10 }
 ```
 
-### Info
+### Order Replicas
 
-```json
-{
-  "title": "RPCs for Noobs",
-  "quantity": 5,
-  "price": 40
-}
+| Method | Endpoint | Notes |
+|---|---|---|
+| POST | `/purchase/<item_id>` | Checks stock, updates catalog, logs the order |
+| GET | `/orders` | Lists local order log for this replica |
+
+## Performance Measurement
+
+Run the system first, then execute:
+
+```bash
+python scripts/performance_test.py --rounds 20
 ```
 
-### Purchase
+The script writes results to:
 
-```json
-{
-  "message": "purchase successful"
-}
+```text
+docs/performance_data.csv
 ```
 
----
+Then copy the numbers into `docs/performance_results.md` or include screenshots/plots if required by the instructor.
 
-## Notes
+## Git Commit Plan
 
-* Each service runs independently in its own container
-* Services communicate using REST APIs
-* Data is stored persistently using CSV files
-* Docker Compose is used to run the whole system easily
+Lab 2 should not be pushed as one large commit. A recommended staged workflow is documented in:
 
----
+```text
+docs/commit_plan.md
+```
 
-## Future Improvements
+Use one commit per stage, test after each stage, and push after each commit.
 
-* Add better logging
-* Add authentication
-* Improve validation and error handling
-* Replace CSV with SQLite
-* Add API gateway
+## Documentation
 
----
-
-## Author
-
-Developed as part of the **Distributed and Operating Systems** .
- 
-## Contributers
-Shahd Alawneh 12116072
-Sewar Diab 12116104
+```text
+docs/design_lab2.md          # design and tradeoffs
+docs/output_lab2.md          # sample run output
+docs/performance_results.md  # experiment table and explanation
+docs/commit_plan.md          # staged Git workflow
+```
