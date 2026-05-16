@@ -1,0 +1,6 @@
+experiment,requests,average_ms,min_ms,max_ms
+info without cache,20,43.659,28.145,69.662
+first cached info request,1,35.815,35.815,35.815
+repeated cached info requests,20,24.852,17.618,47.915
+purchase with cache invalidation,1,452.864,452.864,452.864
+info after invalidation,1,53.475,53.475,53.475
