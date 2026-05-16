@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import csv
 import os
 import threading
@@ -10,6 +10,7 @@ app = Flask(__name__)
 REPLICA_NAME = os.environ.get("REPLICA_NAME", "order")
 ORDER_LOG = os.environ.get("ORDER_LOG", "/data/orders.csv")
 CATALOG_WRITE_URL = os.environ.get("CATALOG_WRITE_URL", "http://catalog1:5001")
+PEER_URLS = [url.strip() for url in os.environ.get("PEER_URLS", "").split(",") if url.strip()]
 
 log_lock = threading.Lock()
 FIELDNAMES = ["order_id", "item_id", "title", "timestamp", "served_by"]
@@ -28,6 +29,34 @@ def read_orders():
         return list(csv.DictReader(file))
 
 
+def write_orders(orders):
+    with open(ORDER_LOG, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(orders)
+
+
+def append_order(row):
+    """Append an order if this exact source order was not already replicated."""
+    with log_lock:
+        orders = read_orders()
+        for existing in orders:
+            if (
+                str(existing.get("order_id")) == str(row.get("order_id"))
+                and existing.get("served_by") == row.get("served_by")
+            ):
+                return False
+        orders.append({
+            "order_id": row["order_id"],
+            "item_id": row["item_id"],
+            "title": row["title"],
+            "timestamp": row["timestamp"],
+            "served_by": row["served_by"],
+        })
+        write_orders(orders)
+        return True
+
+
 def save_order(item_id, title):
     with log_lock:
         orders = read_orders()
@@ -40,11 +69,19 @@ def save_order(item_id, title):
             "served_by": REPLICA_NAME,
         }
         orders.append(row)
-        with open(ORDER_LOG, "w", newline="", encoding="utf-8") as file:
-            writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
-            writer.writeheader()
-            writer.writerows(orders)
+        write_orders(orders)
         return row
+
+
+def replicate_order(order):
+    reports = []
+    for peer in PEER_URLS:
+        try:
+            response = requests.post(f"{peer}/replica/order", json=order, timeout=3)
+            reports.append({"peer": peer, "status": response.status_code})
+        except requests.RequestException as exc:
+            reports.append({"peer": peer, "status": "failed", "error": str(exc)})
+    return reports
 
 
 @app.route("/health", methods=["GET"])
@@ -79,14 +116,28 @@ def purchase(item_id):
         return jsonify(update_response.json()), update_response.status_code
 
     order = save_order(item_id, book["title"])
+    replication_report = replicate_order(order)
     print(f"[{REPLICA_NAME}] bought book '{book['title']}' | order_id={order['order_id']}")
 
     return jsonify({
         "message": "purchase successful",
         "order": order,
+        "order_replication": replication_report,
         "catalog_update": update_response.json(),
         "served_by": REPLICA_NAME,
     })
+
+
+@app.route("/replica/order", methods=["POST"])
+def replica_order():
+    data = request.get_json(silent=True) or {}
+    required = {"order_id", "item_id", "title", "timestamp", "served_by"}
+    if not required.issubset(data.keys()):
+        return jsonify({"error": "invalid replicated order payload", "served_by": REPLICA_NAME}), 400
+
+    inserted = append_order(data)
+    print(f"[{REPLICA_NAME}] replicated order from {data['served_by']} | inserted={inserted}")
+    return jsonify({"message": "order replica synchronized", "inserted": inserted, "served_by": REPLICA_NAME})
 
 
 @app.route("/orders", methods=["GET"])

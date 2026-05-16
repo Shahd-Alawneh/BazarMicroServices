@@ -8,7 +8,7 @@ This repository extends the Lab 1 Bazar.com bookstore into a higher-load version
 - a front-end round-robin load balancer,
 - an in-memory LRU-style cache for `info` lookups,
 - cache invalidation before write operations,
-- replica-to-replica synchronization for catalog updates,
+- replica-to-replica synchronization for catalog and order writes,
 - scripts and documentation for output and performance measurements.
 
 ## Architecture
@@ -23,7 +23,7 @@ Frontend :5000
   |-- round-robin buys  --> Order Replica 1   :5002
   |-- round-robin buys  --> Order Replica 2   :5004
 
-Order replicas send writes to catalog1.
+Order replicas send writes to catalog1 and replicate their order logs to each other.
 Catalog1 invalidates the frontend cache, updates its CSV file, then replicates the update to catalog2.
 ```
 
@@ -34,8 +34,8 @@ Catalog1 invalidates the frontend cache, updates its CSV file, then replicates t
 | Frontend | `bazar-frontend` | 5000 | 5000 | Client API, cache, load balancing |
 | Catalog 1 | `bazar-catalog1` | 5001 | 5001 | Catalog read/write replica |
 | Catalog 2 | `bazar-catalog2` | 5003 | 5001 | Catalog read replica synchronized by catalog1 |
-| Order 1 | `bazar-order1` | 5002 | 5002 | Purchase replica |
-| Order 2 | `bazar-order2` | 5004 | 5002 | Purchase replica |
+| Order 1 | `bazar-order1` | 5002 | 5002 | Purchase replica and order-log sync |
+| Order 2 | `bazar-order2` | 5004 | 5002 | Purchase replica and order-log sync |
 
 ## Data Files
 
@@ -109,6 +109,7 @@ Supported update actions:
 |---|---|---|
 | POST | `/purchase/<item_id>` | Checks stock, updates catalog, logs the order |
 | GET | `/orders` | Lists local order log for this replica |
+| POST | `/replica/order` | Internal order-log synchronization endpoint |
 
 ## Performance Measurement
 
